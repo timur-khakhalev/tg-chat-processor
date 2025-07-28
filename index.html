@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Telegram Chat Processor (JS)</title>
+  <style>
+    :root {
+      --primary-color: #007bff;
+      --primary-hover-color: #0056b3;
+      --background-color: #f4f7f9;
+      --panel-background-color: #ffffff;
+      --text-color: #333;
+      --border-color: #dee2e6;
+      --shadow-color: rgba(0, 0, 0, 0.05);
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--background-color);
+      color: var(--text-color);
+      line-height: 1.6;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+
+    header {
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      color: var(--primary-color);
+      text-align: center;
+      margin: 0 0 20px 0;
+    }
+
+    .controls {
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      background: var(--panel-background-color);
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px var(--shadow-color);
+    }
+
+    .main-content {
+      display: flex;
+      flex-grow: 1;
+      gap: 20px;
+      overflow: hidden;
+    }
+
+    .panel {
+      background-color: var(--panel-background-color);
+      border-radius: 8px;
+      box-shadow: 0 4px 12px var(--shadow-color);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #summary-panel,
+    #hashtags-panel {
+      width: 25%;
+    }
+
+    #output-panel {
+      width: 50%;
+      flex-grow: 1;
+    }
+
+    .panel h2 {
+      margin-top: 0;
+      margin-bottom: 15px;
+      color: var(--primary-color);
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 10px;
+    }
+
+    #summary-list,
+    #hashtags-list {
+      overflow-y: auto;
+    }
+
+    .summary-item,
+    .hashtag-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    .summary-item span {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #output {
+      flex-grow: 1;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 15px;
+      font-family: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
+      font-size: 14px;
+      background-color: #f8f9fa;
+      resize: none;
+    }
+
+    .output-controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+
+    button {
+      padding: 10px 15px;
+      border: none;
+      border-radius: 6px;
+      background-color: var(--primary-color);
+      color: white;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+    }
+
+    button:hover {
+      background-color: var(--primary-hover-color);
+    }
+
+    input[type="checkbox"] {
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      border: 2px solid var(--border-color);
+      border-radius: 4px;
+      cursor: pointer;
+      position: relative;
+      top: 3px;
+    }
+
+    input[type="checkbox"]:checked {
+      background-color: var(--primary-color);
+      border-color: var(--primary-color);
+    }
+
+    input[type="checkbox"]:checked::before {
+      content: '\2713';
+      display: block;
+      text-align: center;
+      color: white;
+      font-size: 14px;
+      line-height: 16px;
+    }
+
+    .error {
+      color: #dc3545;
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <header>
+      <h1>Telegram Chat Processor</h1>
+      <div class="controls">
+        <div>
+          <label for="jsonFile">Select <code>result.json</code> file:</label>
+          <input type="file" id="jsonFile" accept=".json">
+        </div>
+        <div>
+          <input type="checkbox" id="includeReactions" name="includeReactions" checked>
+          <label for="includeReactions">Include Reactions</label>
+        </div>
+      </div>
+    </header>
+
+    <div class="main-content">
+      <div id="summary-panel" class="panel">
+        <h2>Summary</h2>
+        <div id="summary-list"></div>
+      </div>
+      <div id="output-panel" class="panel">
+        <h2>Processed Output <span id="post-count" style="font-weight: normal; font-size: 14px; color: #555;">(0 posts)</span></h2>
+        <div class="output-controls">
+          <button id="copyButton">Copy</button>
+          <button id="saveButton">Save</button>
+          <span id="token-count" style="align-self: center; color: #555; font-size: 14px;">Tokens: 0</span>
+        </div>
+        <textarea id="output" rows="10" readonly>Select a file above to see the processed messages.</textarea>
+      </div>
+      <div id="hashtags-panel" class="panel">
+        <h2>Hashtags</h2>
+        <div id="hashtags-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let allMessages = [];
+    let messageTree = [];
+
+    function createMessageObject(message) {
+      if (!message) {
+        return null;
+      }
+
+      let messageData = {
+        id: message.id || "N/A",
+        date: message.date ? new Date(message.date).toLocaleString() : "Unknown Date",
+        reactions: [],
+        reply_to_message_id: message.reply_to_message_id,
+        text: '',
+        processed_type: '',
+        from: '',
+        hashtags: []
+      };
+
+      if (message.reactions && Array.isArray(message.reactions) && message.reactions.length > 0) {
+        messageData.reactions = message.reactions
+          .map(r => ({
+            emoji: r.emoji,
+            count: r.count
+          }))
+          .filter(r => r.emoji && r.count);
+      }
+
+      if (message.type === "message") {
+        let messageTextContent;
+        if (typeof message.text === 'string') {
+          messageTextContent = message.text;
+        } else if (Array.isArray(message.text)) {
+          messageTextContent = message.text.map(item => {
+            if (typeof item === 'string') {
+              return item;
+            } else if (item && typeof item.text === 'string') {
+              return item.text;
+            }
+            return '';
+          }).join('');
+        } else {
+          messageTextContent = '[Unsupported message format]';
+        }
+
+        messageData.text = messageTextContent;
+        messageData.processed_type = "user_message";
+        messageData.from = message.from || message.author || "Unknown User";
+        messageData.hashtags = (messageTextContent.match(/#(\w+)/g) || []).map(tag => tag.substring(1));
+        return messageData;
+
+      } else if (message.type === "service" && message.action === "topic_created") {
+        messageData.text = `Topic: ${message.title || "Untitled Topic"}`;
+        messageData.processed_type = "topic_creation";
+        messageData.from = message.actor || "System (Topic Creation)";
+        return messageData;
+      }
+
+      return null;
+    }
+
+    function buildMessageTree(messages) {
+      const messageMap = {};
+      messages.forEach(msgObj => {
+        messageMap[msgObj.id] = msgObj;
+      });
+
+      const rootMessages = [];
+      messages.forEach(msgObj => {
+        if (msgObj.reply_to_message_id && messageMap[msgObj.reply_to_message_id]) {
+          const parentMessage = messageMap[msgObj.reply_to_message_id];
+          if (!parentMessage.replies) {
+            parentMessage.replies = [];
+          }
+          parentMessage.replies.push(msgObj);
+        } else {
+          rootMessages.push(msgObj);
+        }
+      });
+
+      return rootMessages;
+    }
+
+    function escapeXml(unsafe) {
+      if (typeof unsafe !== 'string') {
+        return unsafe;
+      }
+      return unsafe.replace(/[<>&"']/g, function (match) {
+        switch (match) {
+          case '<': return '&lt;';
+          case '>': return '&gt;';
+          case '&': return '&amp;';
+          case '"': return '&quot;';
+          case "'": return '&apos;';
+          default: return match;
+        }
+      });
+    }
+
+    function formatMessageToXML(message, indentLevel = 0, includeReactions) {
+      if (!message) return '';
+      const indent = '  '.repeat(indentLevel);
+      let xml = `${indent}<message id="${escapeXml(message.id)}">\n`;
+      xml += `${indent}  <date>${escapeXml(message.date)}</date>\n`;
+      xml += `${indent}  <from>${escapeXml(message.from)}</from>\n`;
+      xml += `${indent}  <text>${escapeXml(message.text)}</text>\n`;
+      xml += `${indent}  <processed_type>${escapeXml(message.processed_type)}</processed_type>\n`;
+
+      if (includeReactions && message.reactions && message.reactions.length > 0) {
+        xml += `${indent}  <reactions>\n`;
+        message.reactions.forEach(reaction => {
+          xml += `${indent}    <reaction>\n`;
+          xml += `${indent}      <emoji>${escapeXml(reaction.emoji)}</emoji>\n`;
+          xml += `${indent}      <count>${escapeXml(String(reaction.count))}</count>\n`;
+          xml += `${indent}    </reaction>\n`;
+        });
+        xml += `${indent}  </reactions>\n`;
+      }
+
+      if (message.replies && message.replies.length > 0) {
+        xml += `${indent}  <replies>\n`;
+        message.replies.forEach(reply => {
+          xml += formatMessageToXML(reply, indentLevel + 2, includeReactions);
+        });
+        xml += `${indent}  </replies>\n`;
+      }
+
+      xml += `${indent}</message>\n`;
+      return xml;
+    }
+
+    function renderOutput() {
+      const outputDiv = document.getElementById('output');
+      const includeReactions = document.getElementById('includeReactions').checked;
+
+      const includedMessageIds = new Set();
+      document.querySelectorAll('#summary-list input[type="checkbox"]:checked').forEach(checkbox => {
+        includedMessageIds.add(parseInt(checkbox.dataset.messageId));
+      });
+
+      const selectedHashtags = new Set();
+      let includeNoHashtags = false;
+      document.querySelectorAll('#hashtags-list input[type="checkbox"]:checked').forEach(checkbox => {
+        const hashtag = checkbox.dataset.hashtag;
+        if (hashtag === '--no-hashtags--') {
+          includeNoHashtags = true;
+        } else {
+          selectedHashtags.add(hashtag);
+        }
+      });
+
+      let filteredMessages = allMessages.filter(msg => includedMessageIds.has(msg.id));
+
+      if (selectedHashtags.size > 0 || includeNoHashtags) {
+        filteredMessages = filteredMessages.filter(msg => {
+          const hasSelectedHashtag = msg.hashtags.some(ht => selectedHashtags.has(ht));
+          const hasNoHashtags = msg.hashtags.length === 0;
+          return hasSelectedHashtag || (includeNoHashtags && hasNoHashtags);
+        });
+      } else {
+        filteredMessages = [];
+      }
+
+      const filteredMessageTree = buildMessageTree(filteredMessages);
+
+      const postCountSpan = document.getElementById('post-count');
+
+      if (filteredMessageTree.length === 0) {
+        outputDiv.value = 'No messages to display based on current filters.';
+        document.getElementById('token-count').textContent = 'Tokens: 0';
+        postCountSpan.textContent = '(0 posts)';
+      } else {
+        let xmlOutput = `<chat>\n`;
+        filteredMessageTree.forEach(msg => {
+          xmlOutput += formatMessageToXML(msg, 1, includeReactions);
+        });
+        xmlOutput += `</chat>`;
+        outputDiv.value = xmlOutput;
+
+        const charCount = xmlOutput.length;
+        const estimatedTokens = Math.round(charCount / 4);
+        document.getElementById('token-count').textContent = `Tokens: ~${estimatedTokens}`;
+        postCountSpan.textContent = `(${filteredMessageTree.length} posts)`;
+      }
+    }
+
+    function populateSummary() {
+      const summaryList = document.getElementById('summary-list');
+      summaryList.innerHTML = '';
+      allMessages.forEach(msg => {
+        const div = document.createElement('div');
+        div.className = 'summary-item';
+        div.innerHTML = `
+          <input type="checkbox" data-message-id="${msg.id}" checked>
+          <div>
+            <strong>${escapeXml(msg.from)}:</strong>
+            <span>${escapeXml(msg.text.substring(0, 100))}...</span>
+          </div>
+        `;
+        div.querySelector('input').addEventListener('change', renderOutput);
+        summaryList.appendChild(div);
+      });
+    }
+
+    function populateHashtags() {
+      const hashtagsList = document.getElementById('hashtags-list');
+      hashtagsList.innerHTML = '';
+
+      const noHashtagDiv = document.createElement('div');
+      noHashtagDiv.className = 'hashtag-item';
+      noHashtagDiv.innerHTML = `<input type="checkbox" data-hashtag="--no-hashtags--" checked> <span>[No Hashtags]</span>`;
+      noHashtagDiv.querySelector('input').addEventListener('change', renderOutput);
+      hashtagsList.appendChild(noHashtagDiv);
+
+      const allHashtags = new Set(allMessages.flatMap(msg => msg.hashtags));
+      allHashtags.forEach(hashtag => {
+        const div = document.createElement('div');
+        div.className = 'hashtag-item';
+        div.innerHTML = `<input type="checkbox" data-hashtag="${hashtag}" checked> <span>#${hashtag}</span>`;
+        div.querySelector('input').addEventListener('change', renderOutput);
+        hashtagsList.appendChild(div);
+      });
+    }
+
+    document.getElementById('jsonFile').addEventListener('change', function (event) {
+      const file = event.target.files[0];
+      const outputDiv = document.getElementById('output');
+
+      if (!file) {
+        outputDiv.value = 'No file selected.';
+        return;
+      }
+
+      outputDiv.value = 'Processing...';
+      const reader = new FileReader();
+
+      reader.onload = function (e) {
+        try {
+          const fileContent = e.target.result;
+          if (!fileContent) {
+            outputDiv.value = 'Error: File is empty or could not be read.';
+            return;
+          }
+          const data = JSON.parse(fileContent);
+
+          if (data && Array.isArray(data.messages)) {
+            allMessages = data.messages.map(createMessageObject).filter(msg => msg !== null);
+            populateSummary();
+            populateHashtags();
+            renderOutput();
+          } else {
+            outputDiv.value = 'Error: JSON file structure is invalid. Expected an object with a "messages" array.';
+          }
+        } catch (error) {
+          console.error("Error processing file:", error);
+          outputDiv.value = `Error parsing JSON file: ${error.message}. Check console for more details.`;
+        }
+      };
+
+      reader.onerror = function (err) {
+        console.error("FileReader error:", err);
+        outputDiv.value = 'Error reading file. See browser console for details.';
+      };
+
+      reader.readAsText(file);
+    });
+
+    document.getElementById('includeReactions').addEventListener('change', renderOutput);
+
+    document.getElementById('copyButton').addEventListener('click', function () {
+      const outputTextarea = document.getElementById('output');
+      outputTextarea.select();
+      document.execCommand('copy');
+    });
+
+    document.getElementById('saveButton').addEventListener('click', function () {
+      const outputTextarea = document.getElementById('output');
+      const textToSave = outputTextarea.value;
+      const blob = new Blob([textToSave], {
+        type: 'application/xml'
+      });
+      const a = document.createElement('a');
+      a.download = 'processed_chat.xml';
+      a.href = URL.createObjectURL(blob);
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+  </script>
+</body>
+
+</html>
