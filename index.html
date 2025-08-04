@@ -71,14 +71,29 @@
       overflow: hidden;
     }
 
-    #summary-panel,
-    #hashtags-panel {
+    #summary-panel {
       width: 25%;
     }
 
     #output-panel {
       width: 50%;
       flex-grow: 1;
+    }
+
+    #side-panels-container {
+      width: 25%;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      overflow: hidden;
+    }
+
+    #hashtags-panel,
+    #authors-panel {
+      flex-basis: 50%;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
 
     .panel h2 {
@@ -90,12 +105,14 @@
     }
 
     #summary-list,
-    #hashtags-list {
+    #hashtags-list,
+    #authors-list {
       overflow-y: auto;
     }
 
     .summary-item,
-    .hashtag-item {
+    .hashtag-item,
+    .author-item {
       display: flex;
       align-items: center;
       gap: 10px;
@@ -187,6 +204,22 @@
           <input type="checkbox" id="includeReactions" name="includeReactions" checked>
           <label for="includeReactions">Include Reactions</label>
         </div>
+        <div>
+          <input type="checkbox" id="showSummary" name="showSummary" checked>
+          <label for="showSummary">Show Summary</label>
+        </div>
+        <div>
+          <input type="checkbox" id="previewOutput" name="previewOutput" checked>
+          <label for="previewOutput">Preview limited output</label>
+        </div>
+        <div>
+          <input type="checkbox" id="includeDates" name="includeDates" checked>
+          <label for="includeDates">Include Dates</label>
+        </div>
+        <div>
+          <input type="checkbox" id="useUserIds" name="useUserIds">
+          <label for="useUserIds">Replace names with IDs</label>
+        </div>
       </div>
     </header>
 
@@ -196,7 +229,8 @@
         <div id="summary-list"></div>
       </div>
       <div id="output-panel" class="panel">
-        <h2>Processed Output <span id="post-count" style="font-weight: normal; font-size: 14px; color: #555;">(0 posts)</span></h2>
+        <h2>Processed Output <span id="post-count" style="font-weight: normal; font-size: 14px; color: #555;">(0
+            posts)</span></h2>
         <div class="output-controls">
           <button id="copyButton">Copy</button>
           <button id="saveButton">Save</button>
@@ -204,300 +238,527 @@
         </div>
         <textarea id="output" rows="10" readonly>Select a file above to see the processed messages.</textarea>
       </div>
-      <div id="hashtags-panel" class="panel">
-        <h2>Hashtags</h2>
-        <div id="hashtags-list"></div>
+      <div id="side-panels-container">
+        <div id="hashtags-panel" class="panel">
+          <h2>Hashtags 
+            <button id="toggleAllHashtagsButton" style="font-size: 12px; padding: 4px 8px; float: right;">Uncheck All</button>
+          </h2>
+          <div id="hashtags-list"></div>
+        </div>
+        <div id="authors-panel" class="panel">
+          <h2>Authors 
+            <button id="sortAuthorsButton" style="font-size: 12px; padding: 4px 8px; float: right;">Sort by Posts</button>
+            <button id="toggleAllAuthorsButton" style="font-size: 12px; padding: 4px 8px; float: right; margin-right: 5px;">Uncheck All</button>
+          </h2>
+          <div id="authors-list"></div>
+        </div>
       </div>
     </div>
   </div>
 
   <script>
-    let allMessages = [];
-    let messageTree = [];
+    document.addEventListener('DOMContentLoaded', function () {
+      let allMessages = [];
+      let authorData = [];
+      let authorSortOrder = 'alpha'; // 'alpha' or 'count'
+      let userIdMap = new Map(); // Maps user names to sequential IDs
+      let nextUserId = 0;
+      const PREVIEW_MESSAGES_LIMIT = 100;
+      let lastFullOutput = '';
 
-    function createMessageObject(message) {
-      if (!message) {
+      function createMessageObject(message) {
+        if (!message) {
+          return null;
+        }
+        let messageData = {
+          id: message.id || "N/A",
+          date: message.date ? new Date(message.date).toLocaleString() : "Unknown Date",
+          reactions: [],
+          reply_to_message_id: message.reply_to_message_id,
+          text: '',
+          processed_type: '',
+          from: '',
+          hashtags: []
+        };
+        if (message.reactions && Array.isArray(message.reactions) && message.reactions.length > 0) {
+          messageData.reactions = message.reactions.map(r => ({
+            emoji: r.emoji,
+            count: r.count
+          })).filter(r => r.emoji && r.count);
+        }
+        if (message.type === "message") {
+          let messageTextContent;
+          if (typeof message.text === 'string') {
+            messageTextContent = message.text;
+          } else if (Array.isArray(message.text)) {
+            messageTextContent = message.text.map(item => {
+              if (typeof item === 'string') {
+                return item;
+              } else if (item && typeof item.text === 'string') {
+                return item.text;
+              }
+              return '';
+            }).join('');
+          } else {
+            messageTextContent = '[Unsupported message format]';
+          }
+          messageData.text = messageTextContent;
+          messageData.from = message.from || message.author || "Unknown User";
+          
+          // Assign sequential user ID
+          if (!userIdMap.has(messageData.from)) {
+            userIdMap.set(messageData.from, nextUserId++);
+          }
+          messageData.userId = `user_${userIdMap.get(messageData.from)}`;
+          
+          messageData.hashtags = (messageTextContent.match(/#(\w+)/g) || []).map(tag => tag.substring(1));
+          return messageData;
+        } else if (message.type === "service" && message.action === "topic_created") {
+          messageData.text = `Topic: ${message.title || "Untitled Topic"}`;
+          messageData.from = message.actor || "System (Topic Creation)";
+          
+          // Assign sequential user ID
+          if (!userIdMap.has(messageData.from)) {
+            userIdMap.set(messageData.from, nextUserId++);
+          }
+          messageData.userId = `user_${userIdMap.get(messageData.from)}`;
+          
+          return messageData;
+        }
         return null;
       }
 
-      let messageData = {
-        id: message.id || "N/A",
-        date: message.date ? new Date(message.date).toLocaleString() : "Unknown Date",
-        reactions: [],
-        reply_to_message_id: message.reply_to_message_id,
-        text: '',
-        processed_type: '',
-        from: '',
-        hashtags: []
-      };
-
-      if (message.reactions && Array.isArray(message.reactions) && message.reactions.length > 0) {
-        messageData.reactions = message.reactions
-          .map(r => ({
-            emoji: r.emoji,
-            count: r.count
-          }))
-          .filter(r => r.emoji && r.count);
-      }
-
-      if (message.type === "message") {
-        let messageTextContent;
-        if (typeof message.text === 'string') {
-          messageTextContent = message.text;
-        } else if (Array.isArray(message.text)) {
-          messageTextContent = message.text.map(item => {
-            if (typeof item === 'string') {
-              return item;
-            } else if (item && typeof item.text === 'string') {
-              return item.text;
+      function buildMessageTree(messages) {
+        // For now, disable reply nesting to avoid deep recursion issues
+        // Just return all messages as root messages
+        return messages.map(msg => {
+          // Remove any existing reply structure to prevent recursion
+          const cleanMsg = { ...msg };
+          delete cleanMsg.replies;
+          return cleanMsg;
+        });
+        
+        /* Original tree building code - commented out due to recursion issues
+        const messageMap = {};
+        messages.forEach(msgObj => {
+          messageMap[msgObj.id] = msgObj;
+        });
+        const rootMessages = [];
+        const processedReplies = new Set();
+        
+        messages.forEach(msgObj => {
+          if (msgObj.reply_to_message_id && messageMap[msgObj.reply_to_message_id] && !processedReplies.has(msgObj.id)) {
+            const parentMessage = messageMap[msgObj.reply_to_message_id];
+            if (!parentMessage.replies) {
+              parentMessage.replies = [];
             }
-            return '';
-          }).join('');
-        } else {
-          messageTextContent = '[Unsupported message format]';
-        }
-
-        messageData.text = messageTextContent;
-        messageData.processed_type = "user_message";
-        messageData.from = message.from || message.author || "Unknown User";
-        messageData.hashtags = (messageTextContent.match(/#(\w+)/g) || []).map(tag => tag.substring(1));
-        return messageData;
-
-      } else if (message.type === "service" && message.action === "topic_created") {
-        messageData.text = `Topic: ${message.title || "Untitled Topic"}`;
-        messageData.processed_type = "topic_creation";
-        messageData.from = message.actor || "System (Topic Creation)";
-        return messageData;
-      }
-
-      return null;
-    }
-
-    function buildMessageTree(messages) {
-      const messageMap = {};
-      messages.forEach(msgObj => {
-        messageMap[msgObj.id] = msgObj;
-      });
-
-      const rootMessages = [];
-      messages.forEach(msgObj => {
-        if (msgObj.reply_to_message_id && messageMap[msgObj.reply_to_message_id]) {
-          const parentMessage = messageMap[msgObj.reply_to_message_id];
-          if (!parentMessage.replies) {
-            parentMessage.replies = [];
+            parentMessage.replies.push(msgObj);
+            processedReplies.add(msgObj.id);
+          } else if (!processedReplies.has(msgObj.id)) {
+            rootMessages.push(msgObj);
           }
-          parentMessage.replies.push(msgObj);
-        } else {
-          rootMessages.push(msgObj);
+        });
+        return rootMessages;
+        */
+      }
+
+      function escapeXml(unsafe) {
+        if (typeof unsafe !== 'string') {
+          return unsafe;
         }
-      });
-
-      return rootMessages;
-    }
-
-    function escapeXml(unsafe) {
-      if (typeof unsafe !== 'string') {
-        return unsafe;
+        return unsafe.replace(/[<>&"']/g, function (match) {
+          switch (match) {
+            case '<':
+              return '&lt;';
+            case '>':
+              return '&gt;';
+            case '&':
+              return '&amp;';
+            case '"':
+              return '&quot;';
+            case "'":
+              return '&apos;';
+            default:
+              return match;
+          }
+        });
       }
-      return unsafe.replace(/[<>&"']/g, function (match) {
-        switch (match) {
-          case '<': return '&lt;';
-          case '>': return '&gt;';
-          case '&': return '&amp;';
-          case '"': return '&quot;';
-          case "'": return '&apos;';
-          default: return match;
+
+      function formatMessageToXML(message, indentLevel = 0, includeReactions, processedIds = new Set()) {
+        if (!message) return '';
+        
+        // Prevent infinite recursion with circular references
+        if (processedIds.has(message.id)) {
+          return '';
         }
-      });
-    }
-
-    function formatMessageToXML(message, indentLevel = 0, includeReactions) {
-      if (!message) return '';
-      const indent = '  '.repeat(indentLevel);
-      let xml = `${indent}<message id="${escapeXml(message.id)}">\n`;
-      xml += `${indent}  <date>${escapeXml(message.date)}</date>\n`;
-      xml += `${indent}  <from>${escapeXml(message.from)}</from>\n`;
-      xml += `${indent}  <text>${escapeXml(message.text)}</text>\n`;
-      xml += `${indent}  <processed_type>${escapeXml(message.processed_type)}</processed_type>\n`;
-
-      if (includeReactions && message.reactions && message.reactions.length > 0) {
-        xml += `${indent}  <reactions>\n`;
-        message.reactions.forEach(reaction => {
-          xml += `${indent}    <reaction>\n`;
-          xml += `${indent}      <emoji>${escapeXml(reaction.emoji)}</emoji>\n`;
-          xml += `${indent}      <count>${escapeXml(String(reaction.count))}</count>\n`;
-          xml += `${indent}    </reaction>\n`;
-        });
-        xml += `${indent}  </reactions>\n`;
-      }
-
-      if (message.replies && message.replies.length > 0) {
-        xml += `${indent}  <replies>\n`;
-        message.replies.forEach(reply => {
-          xml += formatMessageToXML(reply, indentLevel + 2, includeReactions);
-        });
-        xml += `${indent}  </replies>\n`;
-      }
-
-      xml += `${indent}</message>\n`;
-      return xml;
-    }
-
-    function renderOutput() {
-      const outputDiv = document.getElementById('output');
-      const includeReactions = document.getElementById('includeReactions').checked;
-
-      const includedMessageIds = new Set();
-      document.querySelectorAll('#summary-list input[type="checkbox"]:checked').forEach(checkbox => {
-        includedMessageIds.add(parseInt(checkbox.dataset.messageId));
-      });
-
-      const selectedHashtags = new Set();
-      let includeNoHashtags = false;
-      document.querySelectorAll('#hashtags-list input[type="checkbox"]:checked').forEach(checkbox => {
-        const hashtag = checkbox.dataset.hashtag;
-        if (hashtag === '--no-hashtags--') {
-          includeNoHashtags = true;
-        } else {
-          selectedHashtags.add(hashtag);
+        
+        // Limit recursion depth to prevent stack overflow
+        if (indentLevel > 20) {
+          return '';
         }
-      });
-
-      let filteredMessages = allMessages.filter(msg => includedMessageIds.has(msg.id));
-
-      if (selectedHashtags.size > 0 || includeNoHashtags) {
-        filteredMessages = filteredMessages.filter(msg => {
-          const hasSelectedHashtag = msg.hashtags.some(ht => selectedHashtags.has(ht));
-          const hasNoHashtags = msg.hashtags.length === 0;
-          return hasSelectedHashtag || (includeNoHashtags && hasNoHashtags);
-        });
-      } else {
-        filteredMessages = [];
+        
+        processedIds.add(message.id);
+        
+        const indent = '  '.repeat(indentLevel);
+        let xml = `${indent}<message id="${escapeXml(message.id)}">
+`;
+        const includeDates = document.getElementById('includeDates').checked;
+        const useUserIds = document.getElementById('useUserIds').checked;
+        
+        if (includeDates) {
+          xml += `${indent}  <date>${escapeXml(message.date)}</date>
+`;
+        }
+        xml += `${indent}  <from>${escapeXml(useUserIds ? message.userId : message.from)}</from>
+`;
+        xml += `${indent}  <text>${escapeXml(message.text)}</text>
+`;
+        if (message.reply_to_message_id) {
+          xml += `${indent}  <reply_to_message_id>${escapeXml(String(message.reply_to_message_id))}</reply_to_message_id>
+`;
+        }
+        if (includeReactions && message.reactions && message.reactions.length > 0) {
+          xml += `${indent}  <reactions>
+`;
+          message.reactions.forEach(reaction => {
+            xml += `${indent}    <reaction>
+`;
+            xml += `${indent}      <emoji>${escapeXml(reaction.emoji)}</emoji>
+`;
+            xml += `${indent}      <count>${escapeXml(String(reaction.count))}</count>
+`;
+            xml += `${indent}    </reaction>
+`;
+          });
+          xml += `${indent}  </reactions>
+`;
+        }
+        if (message.replies && message.replies.length > 0) {
+          xml += `${indent}  <replies>
+`;
+          message.replies.forEach(reply => {
+            xml += formatMessageToXML(reply, indentLevel + 2, includeReactions, processedIds);
+          });
+          xml += `${indent}  </replies>
+`;
+        }
+        xml += `${indent}</message>
+`;
+        
+        processedIds.delete(message.id);
+        return xml;
       }
 
-      const filteredMessageTree = buildMessageTree(filteredMessages);
-
-      const postCountSpan = document.getElementById('post-count');
-
-      if (filteredMessageTree.length === 0) {
-        outputDiv.value = 'No messages to display based on current filters.';
-        document.getElementById('token-count').textContent = 'Tokens: 0';
-        postCountSpan.textContent = '(0 posts)';
-      } else {
-        let xmlOutput = `<chat>\n`;
-        filteredMessageTree.forEach(msg => {
-          xmlOutput += formatMessageToXML(msg, 1, includeReactions);
+      function generateOutput(forPreview) {
+        const includeReactions = document.getElementById('includeReactions').checked;
+        const includedMessageIds = new Set();
+        document.querySelectorAll('#summary-list input[type="checkbox"]:checked').forEach(checkbox => {
+          const messageId = checkbox.dataset.messageId;
+          // Add both string and number versions to handle type mismatches
+          includedMessageIds.add(messageId);
+          includedMessageIds.add(parseInt(messageId));
         });
-        xmlOutput += `</chat>`;
-        outputDiv.value = xmlOutput;
+        const selectedHashtags = new Set();
+        let includeNoHashtags = false;
+        document.querySelectorAll('#hashtags-list input[type="checkbox"]:checked').forEach(checkbox => {
+          const hashtag = checkbox.dataset.hashtag;
+          if (hashtag === '--no-hashtags--') {
+            includeNoHashtags = true;
+          } else {
+            selectedHashtags.add(hashtag);
+          }
+        });
+        const selectedAuthors = new Set();
+        document.querySelectorAll('#authors-list input[type="checkbox"]:checked').forEach(checkbox => {
+          selectedAuthors.add(checkbox.dataset.author);
+        });
+        let filteredMessages = allMessages.filter(msg => {
+          const summaryMatch = includedMessageIds.size === 0 || includedMessageIds.has(msg.id);
+          const authorMatch = selectedAuthors.size === 0 || selectedAuthors.has(msg.from);
+          const hashtagMatch = (selectedHashtags.size === 0 && !includeNoHashtags) || msg.hashtags.some(ht => selectedHashtags.has(ht)) || (includeNoHashtags && msg.hashtags.length === 0);
+          
+          return summaryMatch && authorMatch && hashtagMatch;
+        });
+        const fullMessageTree = buildMessageTree(filteredMessages);
+        let fullXml = 'No messages to display based on current filters.';
+        if (fullMessageTree.length > 0) {
+          fullXml = `<chat>
+`;
+          fullMessageTree.forEach(msg => {
+            fullXml += formatMessageToXML(msg, 1, includeReactions);
+          });
+          fullXml += `</chat>`;
+        }
+        const tokenCount = fullMessageTree.length > 0 ? Math.round(fullXml.length / 4) : 0;
+        let displayXml = fullXml;
+        if (forPreview && fullMessageTree.length > PREVIEW_MESSAGES_LIMIT) {
+          const previewMessageTree = fullMessageTree.slice(0, PREVIEW_MESSAGES_LIMIT);
+          displayXml = `<chat>
+`;
+          previewMessageTree.forEach(msg => {
+            displayXml += formatMessageToXML(msg, 1, includeReactions);
+          });
+          displayXml += `</chat>`;
+          displayXml += `
 
-        const charCount = xmlOutput.length;
-        const estimatedTokens = Math.round(charCount / 4);
-        document.getElementById('token-count').textContent = `Tokens: ~${estimatedTokens}`;
-        postCountSpan.textContent = `(${filteredMessageTree.length} posts)`;
+<!-- Previewing ${PREVIEW_MESSAGES_LIMIT} of ${fullMessageTree.length} total posts. -->`;
+        }
+        return {
+          xmlForDisplay: displayXml,
+          xmlForExport: fullXml,
+          postCount: fullMessageTree.length,
+          tokenCount: tokenCount
+        };
       }
-    }
 
-    function populateSummary() {
-      const summaryList = document.getElementById('summary-list');
-      summaryList.innerHTML = '';
-      allMessages.forEach(msg => {
-        const div = document.createElement('div');
-        div.className = 'summary-item';
-        div.innerHTML = `
+      function renderOutput() {
+        const outputDiv = document.getElementById('output');
+        const postCountSpan = document.getElementById('post-count');
+        const tokenCountSpan = document.getElementById('token-count');
+        const previewEnabled = document.getElementById('previewOutput').checked;
+        const output = generateOutput(previewEnabled);
+        outputDiv.value = output.xmlForDisplay;
+        tokenCountSpan.textContent = `Tokens: ~${output.tokenCount}`;
+        postCountSpan.textContent = `(${output.postCount} posts)`;
+        lastFullOutput = output.xmlForExport;
+      }
+
+      function populateSummary() {
+        const summaryList = document.getElementById('summary-list');
+        summaryList.innerHTML = '';
+        allMessages.forEach(msg => {
+          const div = document.createElement('div');
+          div.className = 'summary-item';
+          div.innerHTML = `
           <input type="checkbox" data-message-id="${msg.id}" checked>
           <div>
             <strong>${escapeXml(msg.from)}:</strong>
             <span>${escapeXml(msg.text.substring(0, 100))}...</span>
           </div>
         `;
-        div.querySelector('input').addEventListener('change', renderOutput);
-        summaryList.appendChild(div);
-      });
-    }
-
-    function populateHashtags() {
-      const hashtagsList = document.getElementById('hashtags-list');
-      hashtagsList.innerHTML = '';
-
-      const noHashtagDiv = document.createElement('div');
-      noHashtagDiv.className = 'hashtag-item';
-      noHashtagDiv.innerHTML = `<input type="checkbox" data-hashtag="--no-hashtags--" checked> <span>[No Hashtags]</span>`;
-      noHashtagDiv.querySelector('input').addEventListener('change', renderOutput);
-      hashtagsList.appendChild(noHashtagDiv);
-
-      const allHashtags = new Set(allMessages.flatMap(msg => msg.hashtags));
-      allHashtags.forEach(hashtag => {
-        const div = document.createElement('div');
-        div.className = 'hashtag-item';
-        div.innerHTML = `<input type="checkbox" data-hashtag="${hashtag}" checked> <span>#${hashtag}</span>`;
-        div.querySelector('input').addEventListener('change', renderOutput);
-        hashtagsList.appendChild(div);
-      });
-    }
-
-    document.getElementById('jsonFile').addEventListener('change', function (event) {
-      const file = event.target.files[0];
-      const outputDiv = document.getElementById('output');
-
-      if (!file) {
-        outputDiv.value = 'No file selected.';
-        return;
+          div.querySelector('input').addEventListener('change', renderOutput);
+          summaryList.appendChild(div);
+        });
       }
 
-      outputDiv.value = 'Processing...';
-      const reader = new FileReader();
+      function populateHashtags() {
+        const hashtagsList = document.getElementById('hashtags-list');
+        const toggleButton = document.getElementById('toggleAllHashtagsButton');
+        hashtagsList.innerHTML = '';
+        const noHashtagDiv = document.createElement('div');
+        noHashtagDiv.className = 'hashtag-item';
+        noHashtagDiv.innerHTML = `<input type="checkbox" data-hashtag="--no-hashtags--" checked> <span>[No Hashtags]</span>`;
+        noHashtagDiv.querySelector('input').addEventListener('change', renderOutput);
+        hashtagsList.appendChild(noHashtagDiv);
+        const allHashtags = new Set(allMessages.flatMap(msg => msg.hashtags));
+        allHashtags.forEach(hashtag => {
+          const div = document.createElement('div');
+          div.className = 'hashtag-item';
+          div.innerHTML = `<input type="checkbox" data-hashtag="${hashtag}" checked> <span>#${hashtag}</span>`;
+          div.querySelector('input').addEventListener('change', renderOutput);
+          hashtagsList.appendChild(div);
+        });
+        
+        // Update toggle button text based on current state
+        toggleButton.textContent = 'Uncheck All';
+      }
 
-      reader.onload = function (e) {
-        try {
-          const fileContent = e.target.result;
-          if (!fileContent) {
-            outputDiv.value = 'Error: File is empty or could not be read.';
-            return;
-          }
-          const data = JSON.parse(fileContent);
-
-          if (data && Array.isArray(data.messages)) {
-            allMessages = data.messages.map(createMessageObject).filter(msg => msg !== null);
-            populateSummary();
-            populateHashtags();
-            renderOutput();
-          } else {
-            outputDiv.value = 'Error: JSON file structure is invalid. Expected an object with a "messages" array.';
-          }
-        } catch (error) {
-          console.error("Error processing file:", error);
-          outputDiv.value = `Error parsing JSON file: ${error.message}. Check console for more details.`;
+      function populateAuthors() {
+        const authorsList = document.getElementById('authors-list');
+        const sortButton = document.getElementById('sortAuthorsButton');
+        const toggleButton = document.getElementById('toggleAllAuthorsButton');
+        authorsList.innerHTML = '';
+        if (authorData.length === 0) {
+          const authorCounts = new Map();
+          allMessages.forEach(msg => {
+            authorCounts.set(msg.from, (authorCounts.get(msg.from) || 0) + 1);
+          });
+          authorData = Array.from(authorCounts, ([author, count]) => ({
+            author,
+            count
+          }));
         }
-      };
+        if (authorSortOrder === 'alpha') {
+          authorData.sort((a, b) => a.author.localeCompare(b.author));
+          sortButton.textContent = 'Sort by Posts';
+        } else {
+          authorData.sort((a, b) => b.count - a.count);
+          sortButton.textContent = 'Sort by Name';
+        }
+        const useUserIds = document.getElementById('useUserIds').checked;
+        
+        authorData.forEach(({
+          author,
+          count
+        }) => {
+          const div = document.createElement('div');
+          div.className = 'author-item';
+          const displayName = useUserIds ? `user_${userIdMap.get(author)}` : author;
+          div.innerHTML = `
+            <input type="checkbox" data-author="${escapeXml(author)}" checked>
+            <span>${escapeXml(displayName)} (${count})</span>
+          `;
+          div.querySelector('input').addEventListener('change', renderOutput);
+          authorsList.appendChild(div);
+        });
+        
+        // Update toggle button text based on current state
+        toggleButton.textContent = 'Uncheck All';
+      }
 
-      reader.onerror = function (err) {
-        console.error("FileReader error:", err);
-        outputDiv.value = 'Error reading file. See browser console for details.';
-      };
+      function toggleSummaryPanel() {
+        const summaryPanel = document.getElementById('summary-panel');
+        const outputPanel = document.getElementById('output-panel');
+        const showSummary = document.getElementById('showSummary').checked;
+        if (showSummary) {
+          summaryPanel.style.display = 'flex';
+          outputPanel.style.width = '50%';
+        } else {
+          summaryPanel.style.display = 'none';
+          outputPanel.style.width = '75%';
+        }
+      }
 
-      reader.readAsText(file);
-    });
+      function parseJsonSimple(file, onMessage, onComplete, onError) {
+        const reader = new FileReader();
+        
+        reader.onload = function(e) {
+          const content = e.target.result;
+          
+          try {
+            const data = JSON.parse(content);
+            
+            if (!data.messages || !Array.isArray(data.messages)) {
+              onError(new Error('No messages array found in JSON'));
+              return;
+            }
+            
+            let processedCount = 0;
+            
+            data.messages.forEach((message, index) => {
+              const msgObj = createMessageObject(message);
+              if (msgObj) {
+                onMessage(msgObj);
+                processedCount++;
+                if (processedCount % 1000 === 0) {
+                  document.getElementById('output').value = `Processing... found ${processedCount} messages.`;
+                }
+              }
+            });
+            
+            onComplete();
+            
+          } catch (e) {
+            onError(e);
+          }
+        };
+        
+        reader.onerror = onError;
+        reader.readAsText(file);
+      }
 
-    document.getElementById('includeReactions').addEventListener('change', renderOutput);
+      document.getElementById('jsonFile').addEventListener('change', function (event) {
+        const file = event.target.files[0];
+        const outputDiv = document.getElementById('output');
+        if (!file) {
+          outputDiv.value = 'No file selected.';
+          return;
+        }
+        outputDiv.value = 'Processing...';
+        allMessages = [];
+        authorData = [];
+        userIdMap.clear();
+        nextUserId = 0;
 
-    document.getElementById('copyButton').addEventListener('click', function () {
-      const outputTextarea = document.getElementById('output');
-      outputTextarea.select();
-      document.execCommand('copy');
-    });
-
-    document.getElementById('saveButton').addEventListener('click', function () {
-      const outputTextarea = document.getElementById('output');
-      const textToSave = outputTextarea.value;
-      const blob = new Blob([textToSave], {
-        type: 'application/xml'
+        parseJsonSimple(
+          file,
+          // onMessage
+          function(msgObj) {
+            allMessages.push(msgObj);
+          },
+          // onComplete
+          function() {
+            outputDiv.value = `Finished processing ${allMessages.length} messages. Populating UI...`;
+            setTimeout(() => {
+              try {
+                populateSummary();
+                populateHashtags();
+                populateAuthors();
+                renderOutput();
+              } catch (e) {
+                console.error("Error during UI population:", e);
+                outputDiv.value = "An error occurred while building the UI. Check the console.";
+              }
+            }, 50);
+          },
+          // onError
+          function(err) {
+            console.error("File processing failed:", err);
+            outputDiv.value = 'Error reading file. See browser console for details.';
+          }
+        );
       });
-      const a = document.createElement('a');
-      a.download = 'processed_chat.xml';
-      a.href = URL.createObjectURL(blob);
-      a.click();
-      URL.revokeObjectURL(a.href);
+
+      document.getElementById('includeReactions').addEventListener('change', renderOutput);
+      document.getElementById('showSummary').addEventListener('change', toggleSummaryPanel);
+      document.getElementById('previewOutput').addEventListener('change', renderOutput);
+      document.getElementById('includeDates').addEventListener('change', renderOutput);
+      document.getElementById('useUserIds').addEventListener('change', function() {
+        populateAuthors(); // Refresh authors list to show names/IDs
+        renderOutput();
+      });
+      document.getElementById('sortAuthorsButton').addEventListener('click', function () {
+        authorSortOrder = authorSortOrder === 'alpha' ? 'count' : 'alpha';
+        populateAuthors();
+      });
+      
+      document.getElementById('toggleAllAuthorsButton').addEventListener('click', function () {
+        const checkboxes = document.querySelectorAll('#authors-list input[type="checkbox"]');
+        const button = document.getElementById('toggleAllAuthorsButton');
+        const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+        
+        checkboxes.forEach(checkbox => {
+          checkbox.checked = !allChecked;
+        });
+        
+        button.textContent = allChecked ? 'Check All' : 'Uncheck All';
+        renderOutput();
+      });
+      
+      document.getElementById('toggleAllHashtagsButton').addEventListener('click', function () {
+        const checkboxes = document.querySelectorAll('#hashtags-list input[type="checkbox"]');
+        const button = document.getElementById('toggleAllHashtagsButton');
+        const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+        
+        checkboxes.forEach(checkbox => {
+          checkbox.checked = !allChecked;
+        });
+        
+        button.textContent = allChecked ? 'Check All' : 'Uncheck All';
+        renderOutput();
+      });
+      document.getElementById('copyButton').addEventListener('click', function () {
+        navigator.clipboard.writeText(lastFullOutput).then(() => { }).catch(err => {
+          console.error('Failed to copy text: ', err);
+          const outputTextarea = document.createElement('textarea');
+          outputTextarea.value = lastFullOutput;
+          document.body.appendChild(outputTextarea);
+          outputTextarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(outputTextarea);
+        });
+      });
+      document.getElementById('saveButton').addEventListener('click', function () {
+        const blob = new Blob([lastFullOutput], {
+          type: 'application/xml'
+        });
+        const a = document.createElement('a');
+        a.download = 'processed_chat.xml';
+        a.href = URL.createObjectURL(blob);
+        a.click();
+        URL.revokeObjectURL(a.href);
+      });
+      toggleSummaryPanel();
     });
   </script>
 </body>
