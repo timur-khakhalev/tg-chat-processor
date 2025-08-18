@@ -1,5 +1,7 @@
 # Telegram Chat Processor
 
+Save tokens for an AI that you want to use to process your Telegram chat history **60k to ~20k tokens**
+
 A client-side tool to process and filter Telegram chat exports (`result.json`). This tool allows you to filter messages by author and hashtags, and then export the selected messages to an XML file.
 
 **Live Application:** [https://tg-chat-processor.timurai.tech/](https://tg-chat-processor.timurai.tech/)
