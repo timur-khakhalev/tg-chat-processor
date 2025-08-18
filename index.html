@@ -188,6 +188,25 @@
       color: #dc3545;
       font-weight: bold;
     }
+
+    #drop-area {
+      border: 2px dashed var(--border-color);
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: background-color 0.2s ease, border-color 0.2s ease;
+      flex-grow: 1;
+    }
+
+    #drop-area.drag-over {
+      background-color: #e9ecef;
+      border-color: var(--primary-color);
+    }
+
+    #drop-area label {
+      cursor: pointer;
+    }
   </style>
 </head>
 
@@ -196,9 +215,9 @@
     <header>
       <h1>Telegram Chat Processor by <a href="https://timurai.tech">timurai.tech</a></h1>
       <div class="controls">
-        <div>
-          <label for="jsonFile">Select <code>result.json</code> file:</label>
-          <input type="file" id="jsonFile" accept=".json">
+        <div id="drop-area">
+          <label for="jsonFile">Drag & drop <code>result.json</code> file here or click to select</label>
+          <input type="file" id="jsonFile" accept=".json" style="display: none;">
         </div>
         <div>
           <input type="checkbox" id="includeReactions" name="includeReactions" checked>
@@ -657,8 +676,7 @@
         reader.readAsText(file);
       }
 
-      document.getElementById('jsonFile').addEventListener('change', function (event) {
-        const file = event.target.files[0];
+      function handleFile(file) {
         const outputDiv = document.getElementById('output');
         if (!file) {
           outputDiv.value = 'No file selected.';
@@ -673,11 +691,11 @@
         parseJsonSimple(
           file,
           // onMessage
-          function(msgObj) {
+          function (msgObj) {
             allMessages.push(msgObj);
           },
           // onComplete
-          function() {
+          function () {
             outputDiv.value = `Finished processing ${allMessages.length} messages. Populating UI...`;
             setTimeout(() => {
               try {
@@ -692,11 +710,46 @@
             }, 50);
           },
           // onError
-          function(err) {
+          function (err) {
             console.error("File processing failed:", err);
             outputDiv.value = 'Error reading file. See browser console for details.';
           }
         );
+      }
+
+      document.getElementById('jsonFile').addEventListener('change', function (event) {
+        if (event.target.files.length > 0) {
+          handleFile(event.target.files[0]);
+        }
+      });
+
+      const dropArea = document.getElementById('drop-area');
+
+      dropArea.addEventListener('click', () => {
+        document.getElementById('jsonFile').click();
+      });
+
+      dropArea.addEventListener('dragover', (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        dropArea.classList.add('drag-over');
+      });
+
+      dropArea.addEventListener('dragleave', (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        dropArea.classList.remove('drag-over');
+      });
+
+      dropArea.addEventListener('drop', (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        dropArea.classList.remove('drag-over');
+
+        const files = event.dataTransfer.files;
+        if (files.length > 0) {
+          handleFile(files[0]);
+        }
       });
 
       document.getElementById('includeReactions').addEventListener('change', renderOutput);
