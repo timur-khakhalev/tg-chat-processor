@@ -468,37 +468,9 @@
         return xml;
       }
 
-      function generateOutput(forPreview) {
+      function formatMessagesForDisplay(messages, forPreview) {
         const includeReactions = document.getElementById('includeReactions').checked;
-        const includedMessageIds = new Set();
-        document.querySelectorAll('#summary-list input[type="checkbox"]:checked').forEach(checkbox => {
-          const messageId = checkbox.dataset.messageId;
-          // Add both string and number versions to handle type mismatches
-          includedMessageIds.add(messageId);
-          includedMessageIds.add(parseInt(messageId));
-        });
-        const selectedHashtags = new Set();
-        let includeNoHashtags = false;
-        document.querySelectorAll('#hashtags-list input[type="checkbox"]:checked').forEach(checkbox => {
-          const hashtag = checkbox.dataset.hashtag;
-          if (hashtag === '--no-hashtags--') {
-            includeNoHashtags = true;
-          } else {
-            selectedHashtags.add(hashtag);
-          }
-        });
-        const selectedAuthors = new Set();
-        document.querySelectorAll('#authors-list input[type="checkbox"]:checked').forEach(checkbox => {
-          selectedAuthors.add(checkbox.dataset.author);
-        });
-        let filteredMessages = allMessages.filter(msg => {
-          const summaryMatch = includedMessageIds.size === 0 || includedMessageIds.has(msg.id);
-          const authorMatch = selectedAuthors.size === 0 || selectedAuthors.has(msg.from);
-          const hashtagMatch = (selectedHashtags.size === 0 && !includeNoHashtags) || msg.hashtags.some(ht => selectedHashtags.has(ht)) || (includeNoHashtags && msg.hashtags.length === 0);
-          
-          return summaryMatch && authorMatch && hashtagMatch;
-        });
-        const fullMessageTree = buildMessageTree(filteredMessages);
+        const fullMessageTree = buildMessageTree(messages);
         let fullXml = 'No messages to display based on current filters.';
         if (fullMessageTree.length > 0) {
           fullXml = `<chat>
@@ -530,12 +502,64 @@
         };
       }
 
-      function renderOutput() {
+      function updateDynamicContent() {
+        // Step 1: Get current selections from authors and hashtags panels
+        const selectedAuthors = new Set();
+        document.querySelectorAll('#authors-list input[type="checkbox"]:checked').forEach(cb => selectedAuthors.add(cb.dataset.author));
+
+        const selectedHashtags = new Set();
+        let includeNoHashtags = false;
+        document.querySelectorAll('#hashtags-list input[type="checkbox"]:checked').forEach(cb => {
+          if (cb.dataset.hashtag === '--no-hashtags--') {
+            includeNoHashtags = true;
+          } else {
+            selectedHashtags.add(cb.dataset.hashtag);
+          }
+        });
+
+        // Step 2: Determine which messages are visible in the summary
+        const visibleMessageIds = new Set();
+        allMessages.forEach(msg => {
+          const authorMatch = selectedAuthors.size === 0 || selectedAuthors.has(msg.from);
+          const hashtagMatch = (selectedHashtags.size === 0 && !includeNoHashtags) || msg.hashtags.some(ht => selectedHashtags.has(ht)) || (includeNoHashtags && msg.hashtags.length === 0);
+          if (authorMatch && hashtagMatch) {
+            visibleMessageIds.add(msg.id);
+          }
+        });
+
+        // Step 3: Update visibility in the summary panel
+        document.querySelectorAll('#summary-list .summary-item').forEach(item => {
+          const messageId = parseInt(item.querySelector('input').dataset.messageId, 10);
+          if (visibleMessageIds.has(messageId)) {
+            item.style.display = 'flex';
+          } else {
+            item.style.display = 'none';
+          }
+        });
+
+        // Step 4: Get messages for count updates (all checked summary items)
+        const messagesForCounts = allMessages.filter(msg => {
+          const summaryCheckbox = document.querySelector(`#summary-list input[data-message-id="${msg.id}"]`);
+          return summaryCheckbox && summaryCheckbox.checked;
+        });
+
+        // Step 5: Update author and hashtag panels with new counts
+        populateAuthors(messagesForCounts);
+        populateHashtags(messagesForCounts);
+
+        // Step 6: Get the final list of selected messages for output (visible and checked)
+        const messagesForOutput = allMessages.filter(msg => {
+          const summaryCheckbox = document.querySelector(`#summary-list input[data-message-id="${msg.id}"]`);
+          return summaryCheckbox && summaryCheckbox.checked && visibleMessageIds.has(msg.id);
+        });
+
+        // Step 7: Render the final XML output
         const outputDiv = document.getElementById('output');
         const postCountSpan = document.getElementById('post-count');
         const tokenCountSpan = document.getElementById('token-count');
         const previewEnabled = document.getElementById('previewOutput').checked;
-        const output = generateOutput(previewEnabled);
+        const output = formatMessagesForDisplay(messagesForOutput, previewEnabled);
+
         outputDiv.value = output.xmlForDisplay;
         tokenCountSpan.textContent = `Tokens: ~${output.tokenCount}`;
         postCountSpan.textContent = `(${output.postCount} posts)`;
@@ -555,48 +579,74 @@
             <span>${escapeXml(msg.text.substring(0, 100))}...</span>
           </div>
         `;
-          div.querySelector('input').addEventListener('change', renderOutput);
+          div.querySelector('input').addEventListener('change', updateDynamicContent);
           summaryList.appendChild(div);
         });
       }
 
-      function populateHashtags() {
-        const hashtagsList = document.getElementById('hashtags-list');
-        const toggleButton = document.getElementById('toggleAllHashtagsButton');
-        hashtagsList.innerHTML = '';
-        const noHashtagDiv = document.createElement('div');
-        noHashtagDiv.className = 'hashtag-item';
-        noHashtagDiv.innerHTML = `<input type="checkbox" data-hashtag="--no-hashtags--" checked> <span>[No Hashtags]</span>`;
-        noHashtagDiv.querySelector('input').addEventListener('change', renderOutput);
-        hashtagsList.appendChild(noHashtagDiv);
-        const allHashtags = new Set(allMessages.flatMap(msg => msg.hashtags));
-        allHashtags.forEach(hashtag => {
-          const div = document.createElement('div');
-          div.className = 'hashtag-item';
-          div.innerHTML = `<input type="checkbox" data-hashtag="${hashtag}" checked> <span>#${hashtag}</span>`;
-          div.querySelector('input').addEventListener('change', renderOutput);
-          hashtagsList.appendChild(div);
+      function getCheckedStates(listSelector) {
+        const checkedStates = new Map();
+        document.querySelectorAll(`${listSelector} input[type="checkbox"]`).forEach(cb => {
+          checkedStates.set(cb.dataset.author || cb.dataset.hashtag, cb.checked);
         });
-        
-        // Update toggle button text based on current state
-        toggleButton.textContent = 'Uncheck All';
+        return checkedStates;
       }
 
-      function populateAuthors() {
+      function populateHashtags(messagesForCounts) {
+        const hashtagsList = document.getElementById('hashtags-list');
+        const checkedStates = getCheckedStates('#hashtags-list');
+
+        hashtagsList.innerHTML = '';
+        const hashtagCounts = new Map();
+        let noHashtagCount = 0;
+
+        messagesForCounts.forEach(msg => {
+          if (msg.hashtags.length === 0) {
+            noHashtagCount++;
+          } else {
+            msg.hashtags.forEach(ht => hashtagCounts.set(ht, (hashtagCounts.get(ht) || 0) + 1));
+          }
+        });
+
+        const noHashtagDiv = document.createElement('div');
+        noHashtagDiv.className = 'hashtag-item';
+        const isNoHashtagChecked = checkedStates.get('--no-hashtags--') ?? true;
+        noHashtagDiv.innerHTML = `<input type="checkbox" data-hashtag="--no-hashtags--" ${isNoHashtagChecked ? 'checked' : ''}> <span>[No Hashtags] (${noHashtagCount})</span>`;
+        noHashtagDiv.querySelector('input').addEventListener('change', updateDynamicContent);
+        hashtagsList.appendChild(noHashtagDiv);
+
+        const allHashtags = new Set(allMessages.flatMap(msg => msg.hashtags));
+        Array.from(allHashtags).sort().forEach(hashtag => {
+          const count = hashtagCounts.get(hashtag) || 0;
+          const div = document.createElement('div');
+          div.className = 'hashtag-item';
+          const isChecked = checkedStates.get(hashtag) ?? true;
+          div.innerHTML = `<input type="checkbox" data-hashtag="${hashtag}" ${isChecked ? 'checked' : ''}> <span>#${hashtag} (${count})</span>`;
+          div.querySelector('input').addEventListener('change', updateDynamicContent);
+          hashtagsList.appendChild(div);
+        });
+      }
+
+      function populateAuthors(messagesForCounts) {
         const authorsList = document.getElementById('authors-list');
         const sortButton = document.getElementById('sortAuthorsButton');
-        const toggleButton = document.getElementById('toggleAllAuthorsButton');
+        const checkedStates = getCheckedStates('#authors-list');
+
         authorsList.innerHTML = '';
+
+        const authorCounts = new Map();
+        messagesForCounts.forEach(msg => {
+          authorCounts.set(msg.from, (authorCounts.get(msg.from) || 0) + 1);
+        });
+
         if (authorData.length === 0) {
-          const authorCounts = new Map();
-          allMessages.forEach(msg => {
-            authorCounts.set(msg.from, (authorCounts.get(msg.from) || 0) + 1);
-          });
-          authorData = Array.from(authorCounts, ([author, count]) => ({
-            author,
-            count
-          }));
+          authorData = Array.from(new Set(allMessages.map(m => m.from)), author => ({ author, count: 0 }));
         }
+
+        authorData.forEach(ad => {
+          ad.count = authorCounts.get(ad.author) || 0;
+        });
+
         if (authorSortOrder === 'alpha') {
           authorData.sort((a, b) => a.author.localeCompare(b.author));
           sortButton.textContent = 'Sort by Posts';
@@ -604,25 +654,20 @@
           authorData.sort((a, b) => b.count - a.count);
           sortButton.textContent = 'Sort by Name';
         }
+
         const useUserIds = document.getElementById('useUserIds').checked;
-        
-        authorData.forEach(({
-          author,
-          count
-        }) => {
+        authorData.forEach(({ author, count }) => {
           const div = document.createElement('div');
           div.className = 'author-item';
           const displayName = useUserIds ? `user_${userIdMap.get(author)}` : author;
+          const isChecked = checkedStates.get(author) ?? true;
           div.innerHTML = `
-            <input type="checkbox" data-author="${escapeXml(author)}" checked>
+            <input type="checkbox" data-author="${escapeXml(author)}" ${isChecked ? 'checked' : ''}>
             <span>${escapeXml(displayName)} (${count})</span>
           `;
-          div.querySelector('input').addEventListener('change', renderOutput);
+          div.querySelector('input').addEventListener('change', updateDynamicContent);
           authorsList.appendChild(div);
         });
-        
-        // Update toggle button text based on current state
-        toggleButton.textContent = 'Uncheck All';
       }
 
       function toggleSummaryPanel() {
@@ -700,9 +745,9 @@
             setTimeout(() => {
               try {
                 populateSummary();
-                populateHashtags();
-                populateAuthors();
-                renderOutput();
+                populateHashtags(allMessages);
+                populateAuthors(allMessages);
+                updateDynamicContent();
               } catch (e) {
                 console.error("Error during UI population:", e);
                 outputDiv.value = "An error occurred while building the UI. Check the console.";
@@ -752,17 +797,14 @@
         }
       });
 
-      document.getElementById('includeReactions').addEventListener('change', renderOutput);
+      document.getElementById('includeReactions').addEventListener('change', updateDynamicContent);
       document.getElementById('showSummary').addEventListener('change', toggleSummaryPanel);
-      document.getElementById('previewOutput').addEventListener('change', renderOutput);
-      document.getElementById('includeDates').addEventListener('change', renderOutput);
-      document.getElementById('useUserIds').addEventListener('change', function() {
-        populateAuthors(); // Refresh authors list to show names/IDs
-        renderOutput();
-      });
+      document.getElementById('previewOutput').addEventListener('change', updateDynamicContent);
+      document.getElementById('includeDates').addEventListener('change', updateDynamicContent);
+      document.getElementById('useUserIds').addEventListener('change', updateDynamicContent);
       document.getElementById('sortAuthorsButton').addEventListener('click', function () {
         authorSortOrder = authorSortOrder === 'alpha' ? 'count' : 'alpha';
-        populateAuthors();
+        updateDynamicContent();
       });
       
       document.getElementById('toggleAllAuthorsButton').addEventListener('click', function () {
@@ -775,7 +817,7 @@
         });
         
         button.textContent = allChecked ? 'Check All' : 'Uncheck All';
-        renderOutput();
+        updateDynamicContent();
       });
       
       document.getElementById('toggleAllHashtagsButton').addEventListener('click', function () {
@@ -788,7 +830,7 @@
         });
         
         button.textContent = allChecked ? 'Check All' : 'Uncheck All';
-        renderOutput();
+        updateDynamicContent();
       });
       document.getElementById('copyButton').addEventListener('click', function () {
         navigator.clipboard.writeText(lastFullOutput).then(() => { }).catch(err => {
