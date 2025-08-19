@@ -300,16 +300,48 @@
           hashtags: []
         };
         if (message.reactions && Array.isArray(message.reactions) && message.reactions.length > 0) {
-          messageData.reactions = message.reactions.map(r => ({
-            emoji: r.emoji,
-            count: r.count
-          })).filter(r => r.emoji && r.count);
+          messageData.reactions = message.reactions.map(r => {
+            if (r.type === 'emoji') {
+              return { emoji: r.emoji, count: r.count };
+            }
+            if (r.type === 'paid') {
+                return { emoji: `[Paid]`, count: r.count };
+            }
+            if (r.type === 'custom_emoji') {
+              return { emoji: `[Custom Emoji: ${r.document_id}]`, count: r.count };
+            }
+            return null;
+          }).filter(r => r && r.count);
         }
         if (message.type === "message") {
           let messageTextContent;
-          if (typeof message.text === 'string') {
+          if (message.photo) {
+            messageTextContent = `[Photo: ${message.photo}]`;
+          }
+          else if (Array.isArray(message.text_entities)) {
+            messageTextContent = message.text_entities.map(entity => {
+              if (typeof entity === 'string') return entity;
+              switch (entity.type) {
+                case 'bold':
+                  return `**${entity.text}**`;
+                case 'italic':
+                  return `_${entity.text}_`;
+                case 'text_link':
+                  return `[${entity.text}](${entity.href})`;
+                case 'link':
+                  return `<${entity.text}>`;
+                case 'custom_emoji':
+                  return `[emoji: ${entity.text}]`;
+                case 'plain':
+                case 'hashtag':
+                default:
+                  return entity.text;
+              }
+            }).join('');
+          } else if (typeof message.text === 'string') {
             messageTextContent = message.text;
           } else if (Array.isArray(message.text)) {
+            // Fallback for older format
             messageTextContent = message.text.map(item => {
               if (typeof item === 'string') {
                 return item;
@@ -319,7 +351,7 @@
               return '';
             }).join('');
           } else {
-            messageTextContent = '[Unsupported message format]';
+            messageTextContent = ''; // Default to empty for other message types
           }
           messageData.text = messageTextContent;
           messageData.from = message.from || message.author || "Unknown User";
@@ -330,7 +362,7 @@
           }
           messageData.userId = `user_${userIdMap.get(messageData.from)}`;
           
-          messageData.hashtags = (messageTextContent.match(/#(\w+)/g) || []).map(tag => tag.substring(1));
+          messageData.hashtags = (messageTextContent.match(/#([^\s#]+)/g) || []).map(tag => tag.substring(1));
           return messageData;
         } else if (message.type === "service" && message.action === "topic_created") {
           messageData.text = `Topic: ${message.title || "Untitled Topic"}`;
@@ -348,37 +380,26 @@
       }
 
       function buildMessageTree(messages) {
-        // For now, disable reply nesting to avoid deep recursion issues
-        // Just return all messages as root messages
-        return messages.map(msg => {
-          // Remove any existing reply structure to prevent recursion
-          const cleanMsg = { ...msg };
-          delete cleanMsg.replies;
-          return cleanMsg;
-        });
-        
-        /* Original tree building code - commented out due to recursion issues
-        const messageMap = {};
-        messages.forEach(msgObj => {
-          messageMap[msgObj.id] = msgObj;
-        });
+        const messageMap = new Map(messages.map(msg => [msg.id, { ...msg, replies: [] }]));
         const rootMessages = [];
-        const processedReplies = new Set();
-        
-        messages.forEach(msgObj => {
-          if (msgObj.reply_to_message_id && messageMap[msgObj.reply_to_message_id] && !processedReplies.has(msgObj.id)) {
-            const parentMessage = messageMap[msgObj.reply_to_message_id];
-            if (!parentMessage.replies) {
-              parentMessage.replies = [];
-            }
-            parentMessage.replies.push(msgObj);
-            processedReplies.add(msgObj.id);
-          } else if (!processedReplies.has(msgObj.id)) {
-            rootMessages.push(msgObj);
+
+        for (const msg of messageMap.values()) {
+          if (msg.reply_to_message_id && messageMap.has(msg.reply_to_message_id)) {
+            const parent = messageMap.get(msg.reply_to_message_id);
+            parent.replies.push(msg);
+          } else {
+            rootMessages.push(msg);
           }
-        });
+        }
+        
+        // Sort replies by date to maintain chronological order
+        for (const msg of messageMap.values()) {
+            if (msg.replies.length > 1) {
+                msg.replies.sort((a, b) => new Date(a.date) - new Date(b.date));
+            }
+        }
+
         return rootMessages;
-        */
       }
 
       function escapeXml(unsafe) {
